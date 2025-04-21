@@ -15,12 +15,12 @@ const CitaSchema = new Schema({
     },
     doctorAsignado: {
         type: Schema.Types.ObjectId,
-        ref: "Doctor",
+        ref: "doctores",
         required: true
     },
     pacienteAsignado: {
         type: Schema.Types.ObjectId,
-        ref: "Paciente",
+        ref: "pacientes",
         required: true
     }
 }, {
