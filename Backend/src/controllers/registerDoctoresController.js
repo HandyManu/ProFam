@@ -6,12 +6,14 @@ import crypto from "crypto";
 import doctoresModel from "../models/doctores.js";
 import { config } from "../config.js";
 
+
 const registerDoctoresController = {};
 
-registerDoctoresController.registerDoctor = async (req, res) => {   
+// Registro de doctor
+registerDoctoresController.registerDoctor = async (req, res) => {
     const { nombre, especialidad, correo, contraseña } = req.body;
 
-    try{
+    try {
         // Verificar si el correo ya está registrado
         const existingDoctor = await doctoresModel.findOne({ correo });
         if (existingDoctor) {
@@ -21,86 +23,94 @@ registerDoctoresController.registerDoctor = async (req, res) => {
         // Encriptar la contraseña
         const hashedPassword = await bcrypt.hash(contraseña, 10);
 
-        // Crear un nuevo doctor
+        // Crear un nuevo doctor con la estructura original
         const newDoctor = new doctoresModel({
             nombre,
             especialidad,
             correo,
-            contraseña: hashedPassword
+            contraseña: hashedPassword,
+            verificado: false, // Se mantiene como en el original
         });
 
-        // Guardar el doctor en la base de datos
         await newDoctor.save();
 
-        // Generar un token de verificación
-        const verificationToken = crypto.randomBytes(3).toString("hex");;
+        // Generar un código de verificación
+        const verificationCode = crypto.randomBytes(3).toString("hex");
 
-        // Enviar un correo de verificación
-        const tokenCoded = jsonwebtoken.sign({ correo, verificationToken }, config.jwt.secret, { expiresIn: '1h' });
+        // Generar un token con el código de verificación
+        const tokenCoded = jsonwebtoken.sign(
+            { correo, verificationCode },
+            config.JWT_SECRET,
+            { expiresIn: "1h" }
+        );
 
-        res.cookie (verificationToken, tokenCoded, { maxAge: 3 * 60 * 60 * 1000 });
+        // Guardar el token en una cookie
+        res.cookie("verificationToken", tokenCoded, { httpOnly: true, secure: true, maxAge: 3 * 60 * 60 * 1000 });
 
+        // Configuración del servicio de correo
         const transporter = nodemailer.createTransport({
-            service: 'gmail',
+            service: "gmail",
             auth: {
-                user: config.correo.email,
-                pass: config.contraseña.password
-            }
+                user: config.EMAIL_USER,
+                pass: config.EMAIL_PASS,
+            },
         });
 
+        // Configurar opciones del correo con el código de verificación
         const mailOptions = {
-            from: config.correo.email,
+            from: config.EMAIL_USER,
             to: correo,
-            subject: 'Verificación de correo',
-            text: `Por favor verifica tu correo haciendo clic en el siguiente enlace:`
+            subject: "Verificación de correo",
+            text: `Por favor verifica tu correo utilizando este código: ${verificationCode}. Expira en 3 horas.`,
         };
 
-        transporter.sendMail(mailOptions, (error, info) => {
-            if (error) {
-                return res.status(500).json({ message: "Error al enviar el correo de verificación" });
-            } else {
-                return res.status(200).json({ message: "Doctor registrado y correo de verificación enviado" });
-            }
-        });
+        // Enviar correo de verificación
+        await transporter.sendMail(mailOptions);
 
-        res.json({ message: "Doctor registrado y correo de verificación enviado" });
+        return res.status(200).json({ message: "Doctor registrado exitosamente. Verifica tu correo." });
 
-    }
-    catch (error) {
+    } catch (error) {
         console.error("Error al registrar el doctor:", error);
-        return res.status(500).json({ message: "Error al registrar el doctor"+ error });
-    };
-
-    registerDoctoresController.verifyDoctor = async (req, res) => {
-        const {requiredCode} = req.body;
-        const  token  = req.cookies.verificationToken;
-
-        try {
-            const decoded = jsonwebtoken.verify(token, config.jwt.secret);
-            const { email, verificationCode: storedCode } = decoded;
-
-            // Verificar si el token de verificación es correcto
-            if (requiredCode !== storedCode) {
-                return res.status(400).json({ message: "Código de verificación incorrecto" });
-            }
-
-           const doctor = await doctoresModel.findOne({ correo: email });
-            if (!doctor) {
-                return res.status(404).json({ message: "Doctor no encontrado" });
-            }
-
-            // Actualizar el estado de verificación del doctor
-            doctor.verificado = true;
-            await doctor.save();
-
-            res.clearCookie("verificationToken");
-            res.json({ message: "Doctor verificado exitosamente" });
-        }
-        catch (error) {
-            console.error("Error al verificar el doctor:", error);
-            return res.status(500).json({ message: "Error al verificar el doctor" });
-        }
+        return res.status(500).json({ message: "Error interno al registrar el doctor." });
     }
+};
 
-}
+// Verificación de doctor
+registerDoctoresController.verifyDoctor = async (req, res) => {
+    const { requiredCode } = req.body;
+    const token = req.cookies.verificationToken;
+
+    try {
+        if (!token) {
+            return res.status(400).json({ message: "Token de verificación no encontrado." });
+        }
+
+        const decoded = jsonwebtoken.verify(token, config.JWT_SECRET);
+        const { correo, verificationCode: storedCode } = decoded;
+
+        // Verificar si el código ingresado es correcto
+        if (requiredCode !== storedCode) {
+            return res.status(400).json({ message: "Código de verificación incorrecto." });
+        }
+
+        // Buscar el doctor y actualizar su estado de verificación
+        const doctor = await doctoresModel.findOne({ correo });
+        if (!doctor) {
+            return res.status(404).json({ message: "Doctor no encontrado." });
+        }
+
+        doctor.verificado = true;
+        await doctor.save();
+
+        // Limpiar la cookie de verificación
+        res.clearCookie("verificationToken");
+
+        return res.status(200).json({ message: "Doctor verificado exitosamente." });
+
+    } catch (error) {
+        console.error("Error al verificar el doctor:", error);
+        return res.status(500).json({ message: "Error interno al verificar el doctor." });
+    }
+};
+
 export default registerDoctoresController;
